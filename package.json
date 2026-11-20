@@ -1,7 +1,7 @@
 {
-  "name": "cloudflare_cable",
+  "name": "cf-cable",
   "version": "2.0.0",
-  "description": "FIDO caBLE Tunnel Server using Cloudflare Durable Objects (SQLite Backend)",
+  "description": "Serverless WebSocket server for FIDO2 / Passkey cross-device authentication on Cloudflare Workers and Durable Objects",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",

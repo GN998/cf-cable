@@ -1,4 +1,4 @@
-name = "cloudflare_cable"
+name = "cf-cable"
 main = "src/index.ts"
 # Compatibility date for Durable Objects SQLite and newer runtime APIs.
 # Pending DO alarms must be deleted explicitly using deleteAlarm().
