@@ -1,16 +1,15 @@
-# ☁️ Cloudflare cable
+# ☁️ cf-cable
 
+A serverless WebSocket server for **FIDO2 / Passkey cross-device authentication** (`caBLE v2` / CTAP 2.3), running on Cloudflare Workers and Durable Objects.
 
+When signing in with a Passkey by scanning a QR code on a computer with a phone, this service provides the standard WebSocket endpoint that allows both devices to connect and exchange end-to-end encrypted WebAuthn messages.
 
-A super simple, ultra-lightweight FIDO caBLE tunnel server running entirely on Cloudflare Workers and Durable Objects.
+## ✨ Features
 
-`cloudflare_caBLE` provides you with an out-of-the-box, serverless passkey tunnel.
-
-
-## ✨ Features (Why Use It)
-
-* **🚀 Blazing Fast:** Runs on Cloudflare's edge network. This "tunnel" is always established at the node closest to your physical location.
-* **🛠️ Zero Server Maintenance:** No need to worry about Linux upgrades or restarting Docker containers. It is completely serverless—set it and forget it.
+* **☁️ Serverless Deployment:** Runs entirely on Cloudflare Workers and Durable Objects — no VPS, Linux upgrades, or Docker containers to maintain.
+* **🔑 Standard Passkey QR Flow:** Supports QR-initiated cross-device WebAuthn authentication (`/cable/new/` and `/cable/connect/`) using the `fido.cable` WebSocket subprotocol.
+* **📦 Handshake Message Buffering:** Uses Durable Object SQLite storage to temporarily buffer early binary frames (up to 30 frames) if one device connects slightly before the other, delivering them in order once both sides are online.
+* **🧹 Automatic Session Cleanup:** Limits each session room to two devices, automatically closes inactive sessions (121s lifetime, 30s reconnect grace period), and seals completed sessions (`410 Gone`) to prevent reuse.
 
 ## ⚠️ Compliance and Disclaimer
 
@@ -20,28 +19,27 @@ This project is intended solely for academic research and technical exchange reg
 
 Users must use this project in strict compliance with local laws and regulations. It is strictly prohibited to modify or use this code for any form of illegal activity.
 
-
 ## 🚀 Quick Start
 
-Simply modify the code and deploy it yourself. In Cloudflare Workers & Pages, select **Continue with GitHub**.
+Fork or clone this repository, configure your custom domain, and deploy via **Cloudflare Workers & Pages** (**Continue with GitHub**).
 
 ### Configuration (How to use your own domain)
 
+Update `wrangler.toml` with your domain managed on Cloudflare:
 
-```toml
+~~~toml
 routes = [
-  { pattern = "cable.yourdomain.com", custom_domain = true } 
+  { pattern = "cable.yourdomain.com", custom_domain = true }
 ]
-
-```
+~~~
 
 ## 🙏 Acknowledgments
 
-This project is made possible thanks to the incredible infrastructure and open standards provided by:
+This project is made possible thanks to the infrastructure and open standards provided by:
 
-* **[Cloudflare](https://www.cloudflare.com/)**: For providing the blazing-fast edge network, Workers, and Durable Objects infrastructure that powers this serverless tunnel.
+* **[Cloudflare](https://www.cloudflare.com/)**: For providing the Workers and Durable Objects serverless runtime.
 * **[FIDO Alliance](https://fidoalliance.org/)**: For developing and maintaining the open FIDO2/WebAuthn and caBLE protocol specifications that secure the modern web.
 
 ---
 
-Thanks to [GitHub](https://github.com/) and [Linux do](https://linux.do/).
+GitHub and LinuxDo
