@@ -63,6 +63,11 @@ export const DB_CONFIG = {
     MAX_CAPACITY: 30,
 
     /**
+     * Cap cumulative offline buffered bytes at 2 MiB to accommodate maximum 1 MiB CTAP 2.3 frames while preventing SQLite bloat and isolate OOM spikes.
+     */
+    MAX_BUFFER_BYTES: 2097152,
+
+    /**
      * Cap total relayed frames per session to prevent unauthorized data tunneling abuse.
      */
     MAX_RELAYED_FRAMES: 200,
@@ -73,7 +78,7 @@ export const DB_CONFIG = {
     SESSION_TTL_MS: 121000,
 
     /**
-     * Retain tombstone state for 5 minutes to block delayed replay attempts before purging storage for Durable Object garbage collection.
+     * Retain tombstone state for 3 minutes to block delayed replay attempts before purging storage for Durable Object garbage collection.
      */
     TOMBSTONE_TTL_MS: 181000,
 } as const;

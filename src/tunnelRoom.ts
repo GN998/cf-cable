@@ -20,7 +20,7 @@ export class TunnelRoom extends DurableObject<Env> {
     /**
      * Cache persistent state flags in memory to prevent redundant billed storage reads within the same isolate lifecycle.
      */
-    private isTombstonedCache: boolean | null = null;
+    private isTombstonedCache: boolean = false;
     private isContactCache: boolean | null = null;
     private clientPayloadCache: string | null = null;
 
@@ -30,16 +30,12 @@ export class TunnelRoom extends DurableObject<Env> {
         // Instantiate the built-in SQLite data access layer
         this.db = new BufferStore(this.ctx.storage.sql);
 
-        // Use blockConcurrencyWhile for asynchronous schema initialization, blocking concurrent requests.
+        // Enforce fail-fast schema and tombstone initialization before delivering any events so broken isolates abort and reset cleanly.
         this.ctx.blockConcurrencyWhile(async () => {
-            try {
-                // Skip schema creation when waking a tombstoned instance for final eviction to avoid billed SQLite page writes.
-                this.isTombstonedCache = !!(await this.ctx.storage.get(DO_STATE_KEYS.TOMBSTONED));
-                if (!this.isTombstonedCache) {
-                    this.db.initSchema();
-                }
-            } catch (error) {
-                console.error("[caBLE] Failed to initialize SQLite database:", error);
+            // Skip schema creation when waking a tombstoned instance for final eviction to avoid billed SQLite page writes.
+            this.isTombstonedCache = !!(await this.ctx.storage.get(DO_STATE_KEYS.TOMBSTONED));
+            if (!this.isTombstonedCache) {
+                this.db.initSchema();
             }
         });
     }
@@ -49,9 +45,6 @@ export class TunnelRoom extends DurableObject<Env> {
         const path = url.pathname;
         
         // 1. Return 410 Gone if tombstoned to prevent session reuse and replay attacks.
-        if (this.isTombstonedCache === null) {
-            this.isTombstonedCache = !!(await this.ctx.storage.get(DO_STATE_KEYS.TOMBSTONED));
-        }
         if (this.isTombstonedCache) {
             return createError("Gone: Tunnel is exhausted and permanently sealed", 410);
         }
