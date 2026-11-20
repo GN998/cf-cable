@@ -5,6 +5,11 @@ import { BufferStore } from "./db/bufferStore";
 import { inferRole, validateFrame, generateRoutingId } from "./utils/fido";
 import { createError } from "./utils/response";
 
+interface SocketAttachment {
+    relayedFrames: number;
+    sessionDeadline: number;
+}
+
 /**
  * FIDO caBLE Tunnel Core Room Class (Durable Object) - v4.3 (Fixed)
  * Standard-compliant PASSKEY tunnel with hibernation support and offline SQLite buffering.
@@ -78,10 +83,16 @@ export class TunnelRoom extends DurableObject<Env> {
 
         // Mark buffer empty only when the first peer arrives in a fresh session with no pending alarm.
         const pendingAlarm = await this.ctx.storage.getAlarm();
-        const hasActivePeers = this.ctx.getWebSockets().some(s => s.readyState === 1);
-        if (!hasActivePeers && pendingAlarm === null) {
+        const activeSockets = this.ctx.getWebSockets().filter(s => s.readyState === 1);
+        if (activeSockets.length === 0 && pendingAlarm === null) {
             this.db.markEmpty();
         }
+
+        // Anchor an immutable session deadline across peer joins, reconnects, and hibernation wakes to prevent TTL extension.
+        const now = Date.now();
+        const existingAttachment = activeSockets[0]?.deserializeAttachment() as SocketAttachment | null;
+        const sessionDeadline = existingAttachment?.sessionDeadline
+            ?? (pendingAlarm !== null && pendingAlarm > now ? pendingAlarm : now + DB_CONFIG.SESSION_TTL_MS);
 
         // Resolve participant role directly from endpoint semantics to support non-browser native clients.
         const role = inferRole(path, hasClientPayload);
@@ -90,8 +101,8 @@ export class TunnelRoom extends DurableObject<Env> {
         const existingSameRoleSockets = this.ctx.getWebSockets(role).filter(s => s.readyState === 1);
         let inheritedFrames = 0;
         for (const sock of existingSameRoleSockets) {
-            const prevAttachment = sock.deserializeAttachment() as { relayedFrames?: number } | null;
-            if (prevAttachment?.relayedFrames && prevAttachment.relayedFrames > inheritedFrames) {
+            const prevAttachment = sock.deserializeAttachment() as SocketAttachment | null;
+            if (prevAttachment && prevAttachment.relayedFrames > inheritedFrames) {
                 inheritedFrames = prevAttachment.relayedFrames;
             }
             try { 
@@ -112,11 +123,13 @@ export class TunnelRoom extends DurableObject<Env> {
         // Accept WebSocket with the role tag for hibernation state recovery.
         this.ctx.acceptWebSocket(server, [role]);
 
-        // Attach frame counter to the WebSocket to survive Durable Object hibernation without billed storage writes.
-        server.serializeAttachment({ relayedFrames: inheritedFrames });
+        // Attach frame counter and immutable deadline to survive Durable Object hibernation without billed storage writes.
+        server.serializeAttachment({ relayedFrames: inheritedFrames, sessionDeadline });
 
-        // Schedule or extend absolute session TTL alarm to guarantee cleanup of orphaned or stalled rooms.
-        await this.ctx.storage.setAlarm(Date.now() + DB_CONFIG.SESSION_TTL_MS);
+        // Arm or restore the session alarm only when changed to skip redundant storage writes on normal peer joins.
+        if (pendingAlarm !== sessionDeadline) {
+            await this.ctx.storage.setAlarm(sessionDeadline);
+        }
 
         // 6. Retrieve and dispatch offline buffered messages.
         try {
@@ -163,14 +176,17 @@ export class TunnelRoom extends DurableObject<Env> {
             return;
         }
 
-        // Persist frame count in WebSocket attachment so hibernation eviction cannot reset the rate limit and contact rooms isolate counts per connection.
-        const attachment = (ws.deserializeAttachment() as { relayedFrames?: number } | null) ?? { relayedFrames: 0 };
-        const currentFrames = (attachment.relayedFrames ?? 0) + 1;
+        // Persist frame count in WebSocket attachment while preserving sessionDeadline across hibernation cycles.
+        const attachment = ws.deserializeAttachment() as SocketAttachment | null;
+        const currentFrames = (attachment?.relayedFrames ?? 0) + 1;
         if (currentFrames > DB_CONFIG.MAX_RELAYED_FRAMES) {
             ws.close(1008, "Policy Violation: Maximum session frame limit exceeded");
             return;
         }
-        ws.serializeAttachment({ relayedFrames: currentFrames });
+        ws.serializeAttachment({
+            relayedFrames: currentFrames,
+            sessionDeadline: attachment?.sessionDeadline ?? Date.now() + DB_CONFIG.SESSION_TTL_MS
+        });
 
         const tags = this.ctx.getTags(ws);
         const myRole = (tags && tags.length > 0 ? tags[0] : "client") as Role; // Retrieve role from socket tags.
@@ -254,8 +270,13 @@ export class TunnelRoom extends DurableObject<Env> {
             // Use RECONNECT_GRACE_MS or default to 30s.
             const configuredGrace = Number(this.env.RECONNECT_GRACE_MS ?? "30000");
             const gracePeriodMs = Number.isFinite(configuredGrace) && configuredGrace >= 1000 ? configuredGrace : 30000;
+
+            // Cap reconnect grace period at the surviving peer's session deadline to prevent late disconnects from extending TTL.
+            const peerAttachment = peerSockets[0].deserializeAttachment() as SocketAttachment | null;
+            const graceDeadline = Date.now() + gracePeriodMs;
+            const boundedAlarm = peerAttachment ? Math.min(peerAttachment.sessionDeadline, graceDeadline) : graceDeadline;
             
-            await this.ctx.storage.setAlarm(Date.now() + gracePeriodMs); 
+            await this.ctx.storage.setAlarm(boundedAlarm); 
             console.log(`[caBLE] Peer [${myRole}] disconnected. Initiating ${gracePeriodMs / 1000}s reconnection grace period.`);
         } else {
             // Both peers disconnected; schedule teardown in 1 second.
