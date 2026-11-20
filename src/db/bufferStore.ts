@@ -46,30 +46,34 @@ export class BufferStore {
     }
 
     /**
-     * Safely buffers an offline peer message to SQLite.
-     * Enforces strict buffer-overflow caps in a single atomic SQL statement to prevent DoS attacks and reduce query overhead.
+     * Buffer an offline peer message to SQLite within strict frame-count and cumulative byte-size limits.
+     * Enforce both caps in a single atomic SQL statement to prevent storage amplification and OOM spikes without extra round-trips.
      * @param senderRole The role of the peer emitting the message ("client" | "authenticator")
      * @param data Binary payload to buffer
      */
     public saveMessage(senderRole: string, data: ArrayBuffer): void {
-        const sql = this.requireSql();
-        try {
-            const binaryData = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-            const cursor = sql.exec(
-                `INSERT INTO msg_buffer (sender_role, data) SELECT ?, ? WHERE (SELECT count(*) FROM msg_buffer) < ?`,
-                senderRole,
-                binaryData,
-                DB_CONFIG.MAX_CAPACITY
-            );
+        // Short-circuit oversized offline frames in memory before touching SQLite to avoid billed table scans.
+        if (data.byteLength > DB_CONFIG.MAX_BUFFER_BYTES) {
+            throw new Error(`Buffer overflow: Frame size (${data.byteLength} bytes) exceeds offline budget of ${DB_CONFIG.MAX_BUFFER_BYTES} bytes.`);
+        }
 
-            if (cursor.rowsWritten > 0) {
-                this.mayHaveMessages = true;
-            } else {
-                throw new Error(`Buffer overflow: Exceeded maximum capacity of ${DB_CONFIG.MAX_CAPACITY} frames.`);
-            }
-        } catch (error) {
-            console.error("[BufferStore] Fatal exception during saveMessage database call:", error);
-            throw error;
+        const sql = this.requireSql();
+        const cursor = sql.exec(
+            `INSERT INTO msg_buffer (sender_role, data)
+             SELECT ?, ?
+             WHERE (SELECT count(*) FROM msg_buffer) < ?
+               AND COALESCE((SELECT sum(length(data)) FROM msg_buffer), 0) + ? <= ?`,
+            senderRole,
+            data,
+            DB_CONFIG.MAX_CAPACITY,
+            data.byteLength,
+            DB_CONFIG.MAX_BUFFER_BYTES
+        );
+
+        if (cursor.rowsWritten > 0) {
+            this.mayHaveMessages = true;
+        } else {
+            throw new Error(`Buffer overflow: Exceeded offline capacity (${DB_CONFIG.MAX_CAPACITY} frames or ${DB_CONFIG.MAX_BUFFER_BYTES} bytes).`);
         }
     }
 
